@@ -5,9 +5,6 @@ name: '[CI/CD] CI Update'
 on: # rebuild any PRs and main branch changes
   pull_request_target:
     types:
-      - opened
-      - reopened
-      - synchronize
       - labeled
     branches:
       - main
@@ -39,18 +36,21 @@ jobs:
     name: Automatically update README, CRDs and CHANGELOG
     permissions:
       contents: read
-    if: |
-      needs.get-chart.outputs.result == 'ok' &&
-      (
-        contains(github.event.pull_request.labels.*.name, 'verify') || (github.event.action == 'labeled' && github.event.label.name == 'verify')
-      )
+    if: needs.get-chart.outputs.result == 'ok' && github.event.label.name == 'verify'
     steps:
+      - name: Check the label was added by a maintainer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SENDER: ${{ github.event.sender.login }}
+        run: |
+          permission="$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${SENDER}/permission" --jq '.permission')"
+          [[ "$permission" == "admin" || "$permission" == "write" ]]
       - name: Checkout bitnami/charts
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
-          ref: ${{github.event.pull_request.head.ref}}
+          ref: ${{github.event.pull_request.head.sha}}
           repository: ${{github.event.pull_request.head.repo.full_name}}
-          token: ${{ secrets.BITNAMI_BOT_TOKEN }}
+          persist-credentials: false
           path: charts
       - name: Clone upstream bitnami/charts repository
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -195,11 +195,16 @@ jobs:
           fi
       - id: update-pr
         name: Push changes
+        env:
+          BITNAMI_BOT_TOKEN: ${{ secrets.BITNAMI_BOT_TOKEN }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           cd $GITHUB_WORKSPACE/charts
           # Push all the new commits, if any
-          if [[ $(git cherry -v) ]]; then
-            git push
+          if [[ -n "$(git rev-list "${HEAD_SHA}..HEAD")" ]]; then
+            git push "https://x-access-token:${BITNAMI_BOT_TOKEN}@github.com/${HEAD_REPO}.git" "HEAD:refs/heads/${HEAD_REF}"
             echo "result=ok" >> $GITHUB_OUTPUT
           else
             echo "result=skip" >> $GITHUB_OUTPUT

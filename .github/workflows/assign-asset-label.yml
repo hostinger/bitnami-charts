@@ -13,8 +13,14 @@ jobs:
     name: Assign label
     runs-on: ubuntu-latest
     permissions:
+      contents: read
       pull-requests: write
     steps:
+      - name: Checkout base branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          sparse-checkout: bitnami
       - id: get-asset
         name: Get modified assets
         env:
@@ -23,13 +29,17 @@ jobs:
         run: |
           # This request doesn't consume API calls.
           curl -Lkso $TEMP_FILE $DIFF_URL
-          files_changed="$(sed -nr 's/[\-\+]{3} [ab]\/(.*)/\1/p' $TEMP_FILE | sort | uniq)"
+          files_changed="$(sed -nr 's/^[\-\+]{3} [ab]\/(.*)/\1/p' $TEMP_FILE | sort | uniq)"
           # Adding || true to avoid "Process exited with code 1" errors
-          assets=($(echo "$files_changed" | xargs dirname | sed -nr "s|bitnami/([^/]*).*|\1|p" | sort | uniq || true))
+          readarray -t assets < <(echo "$files_changed" | xargs dirname | sed -nr "s|bitnami/([^/]*).*|\1|p" | sort | uniq || true)
 
           if [[ "${#assets[@]}" -ne "1" ]]; then
             echo "result=skip" >> $GITHUB_OUTPUT
             echo "message=Label cannot be set, cannot infer a single label from: ${assets[@]}" >> $GITHUB_OUTPUT
+            echo "name=NONE" >> $GITHUB_OUTPUT
+          elif ! [[ "${assets}" =~ ^[a-z0-9-]+$ && -d "bitnami/${assets}" ]]; then
+            echo "result=skip" >> $GITHUB_OUTPUT
+            echo "message=Label cannot be set, '${assets}' is not an existing chart" >> $GITHUB_OUTPUT
             echo "name=NONE" >> $GITHUB_OUTPUT
           else
             echo "result=ok" >> $GITHUB_OUTPUT
@@ -38,12 +48,15 @@ jobs:
           fi
       - name: Show messages
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
+        env:
+          RESULT: ${{ steps.get-asset.outputs.result }}
+          MESSAGE: ${{ steps.get-asset.outputs.message }}
         with:
           script: |
-            if ("${{ steps.get-asset.outputs.result }}" != "ok" ) {
-              core.warning("${{ steps.get-asset.outputs.message }}")
+            if (process.env.RESULT != "ok" ) {
+              core.warning(process.env.MESSAGE)
             } else {
-              core.info("${{ steps.get-asset.outputs.message }}")
+              core.info(process.env.MESSAGE)
             }
       - name: Labeling
         if: ${{ steps.get-asset.outputs.result == 'ok' }}
